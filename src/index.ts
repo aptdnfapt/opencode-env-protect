@@ -4,8 +4,11 @@ import { isSensitiveKey, createRedactor } from "./redactor"
 import { appendFileSync, mkdirSync } from "fs"
 import { join } from "path"
 
-// Store sensitive vars: { varName: actualValue }
+// Store sensitive vars: { varName: actualValue } - these get REDACTED
 const sensitiveVars: Map<string, string> = new Map()
+
+// Store ALL var names from .env files - these get LISTED in system prompt
+const allEnvVarNames: Set<string> = new Set()
 
 // ═══════════════════════════════════════════════════════════════
 // DEBUG LOGGING - writes to ~/.opencode-env-protect.log
@@ -66,16 +69,19 @@ export const EnvProtectPlugin: Plugin = async (ctx) => {
   for (const filePath of envFiles) {
     const vars = await parseEnvFile(filePath)
     for (const [key, value] of Object.entries(vars)) {
-      // Only track vars with sensitive-looking names (and not excluded)
+      // Track ALL var names for system prompt (AI can't read .env anymore)
+      allEnvVarNames.add(key)
+      
+      // Only REDACT vars with sensitive-looking names (and not excluded)
       if (isSensitiveKey(key, SENSITIVE_PATTERNS) && value.length > 0 && !EXCLUDED_VARS.has(key)) {
         sensitiveVars.set(key, value)
-        
-        // ═══════════════════════════════════════════════════════════
-        // STEP 2: Export to process.env so bash PTYs inherit them
-        // ═══════════════════════════════════════════════════════════
-        if (!process.env[key]) {
-          process.env[key] = value
-        }
+      }
+      
+      // ═══════════════════════════════════════════════════════════
+      // Export ALL vars to process.env so bash PTYs inherit them
+      // ═══════════════════════════════════════════════════════════
+      if (!process.env[key] && value.length > 0) {
+        process.env[key] = value
       }
     }
   }
@@ -90,8 +96,8 @@ export const EnvProtectPlugin: Plugin = async (ctx) => {
   // Create redactor function (replaces values with [ENV:VAR_NAME])
   const redact = createRedactor(sensitiveVars)
   
-  // Build list of available var names for system prompt
-  const availableVars = Array.from(sensitiveVars.keys()).map(k => `$${k}`)
+  // Build list of ALL var names for system prompt (AI can't read .env files)
+  const availableVars = Array.from(allEnvVarNames).map(k => `$${k}`)
   
   const hooks: Hooks = {
     // ═══════════════════════════════════════════════════════════════
@@ -144,8 +150,9 @@ ${availableVars.join(", ")}
 
 IMPORTANT RULES:
 1. Use these variables directly (e.g., \`curl -H "Authorization: Bearer $API_KEY"\`)
-2. NEVER read .env, .env.local, .env.*, or any secrets/credentials files
-3. NEVER use cat, less, head, tail, or any tool to view env/secret files
+2. NEVER read .env, .env.local, .env.production, .env.development or similar files containing real values
+3. You CAN read .env.example files - those are safe templates
+4. NEVER use cat, less, head, tail, or any tool to view actual env/secret files
 4. NEVER hardcode sensitive values - always use the variable names
 5. If you see [ENV:VAR_NAME] in outputs, that means the actual value was redacted for security
 6. To use a redacted value, reference the original variable: $VAR_NAME
