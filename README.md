@@ -11,29 +11,30 @@ An OpenCode plugin that prevents environment variables from being leaked to AI m
 
 ## Installation
 
-### Option 1: Local file (recommended for testing)
+### Step 1: Build the plugin
 
-1. Build the plugin:
 ```bash
+git clone https://github.com/user/opencode-env-protect
 cd opencode-env-protect
 bun install
 bun build src/index.ts --outfile dist/opencode-env-protect.js --target bun
 ```
 
-2. Add to your OpenCode config (`~/.config/opencode/opencode.json`):
-```json
-{
-  "plugin": ["file:///path/to/opencode-env-protect/dist/opencode-env-protect.js"]
-}
+### Step 2: Copy to plugins directory
+
+**Project level** (only for this project):
+```bash
+mkdir -p .opencode/plugins
+cp dist/opencode-env-protect.js .opencode/plugins/
 ```
 
-### Option 2: npm (when published)
-
-```json
-{
-  "plugin": ["opencode-env-protect"]
-}
+**System level** (all projects):
+```bash
+mkdir -p ~/.config/opencode/plugins
+cp dist/opencode-env-protect.js ~/.config/opencode/plugins/
 ```
+
+OpenCode automatically loads all `.js` files from these plugin directories - no config needed.
 
 ## How It Works
 
@@ -49,16 +50,34 @@ On plugin load, scans for `.env*` files up to 2 directories deep:
 
 **Ignored directories**: `node_modules`, `.git`, `dist`, `build`, etc.
 
-### 2. Variable Export
+### 2. Variable Export (How it works)
 
-All variables from `.env` files are exported to `process.env`. This means:
-- Child processes (bash PTYs) inherit these variables
-- AI can use `$VAR_NAME` syntax without running `export` first
+When the plugin loads, it does `process.env[key] = value` for every variable found in `.env` files.
+
+**Why this works:**
+```
+Your shell
+    ↓ spawns
+OpenCode process (plugin sets process.env.API_KEY = "secret")
+    ↓ spawns
+Bash PTY (inherits process.env → $API_KEY is available)
+```
+
+Child processes inherit environment variables from their parent. So:
+- Plugin adds vars to OpenCode's `process.env`
+- When AI runs bash commands, those bash PTYs inherit the vars
+- AI can use `$VAR_NAME` directly - no `export` or `source .env` needed
 
 ```bash
-# AI can just run this - no export needed
+# AI can just run this - vars already available
 curl -H "Authorization: Bearer $API_KEY" https://api.example.com
+
+# No need for this:
+# export API_KEY=... && curl ...
+# source .env && curl ...
 ```
+
+**System prompt tells AI** which variables exist (since it can't read `.env` files anymore).
 
 ### 3. Value Redaction
 
