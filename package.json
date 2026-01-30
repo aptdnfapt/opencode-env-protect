@@ -1,0 +1,29 @@
+{
+  "name": "opencode-env-protect",
+  "version": "0.1.0",
+  "description": "Protects environment variables from being leaked to AI models",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target bun",
+    "test": "bun test"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": "*"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "latest",
+    "bun-types": "latest",
+    "typescript": "^5.0.0"
+  },
+  "keywords": [
+    "opencode",
+    "plugin",
+    "security",
+    "env",
+    "environment",
+    "protect"
+  ],
+  "license": "MIT"
+}
