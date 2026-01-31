@@ -1,11 +1,14 @@
-import type { Plugin, Hooks } from "@opencode-ai/plugin"
+import type { Plugin, Hooks, PluginInput } from "@opencode-ai/plugin"
 import { scanEnvFiles, parseEnvFile } from "./scanner"
-import { isSensitiveKey, createRedactor } from "./redactor"
-import { appendFileSync, mkdirSync } from "fs"
+import { isSensitiveKey, createRedactor, createRedactorWithTracking } from "./redactor"
+import { appendFileSync } from "fs"
 import { join } from "path"
 
 // Store sensitive vars: { varName: actualValue } - these get REDACTED
 const sensitiveVars: Map<string, string> = new Map()
+
+// Store client for sending TUI messages
+let _client: PluginInput["client"] | null = null
 
 // Store ALL var names from .env files - these get LISTED in system prompt
 const allEnvVarNames: Set<string> = new Set()
@@ -35,11 +38,12 @@ const SENSITIVE_PATTERNS = [
   /TOKEN/i,
   /PASSWORD/i,
   /PASSWD/i,
-  /API/i,
   /PRIVATE/i,
   /CREDENTIAL/i,
   /AUTH/i,
   /CERT/i,
+  // Note: /API/i removed - too broad, catches API_URL which isn't sensitive
+  // API_KEY, API_SECRET, API_TOKEN already caught by other patterns
 ]
 
 // Env vars to NEVER redact (false positives)
@@ -93,8 +97,11 @@ export const EnvProtectPlugin: Plugin = async (ctx) => {
     }
   }
   
-  // Create redactor function (replaces values with [ENV:VAR_NAME])
-  const redact = createRedactor(sensitiveVars)
+  // Create redactor function (replaces values with [ENV:VAR_NAME] and tracks what was redacted)
+  const redactWithTracking = createRedactorWithTracking(sensitiveVars)
+  
+  // Store client for TUI messages
+  _client = ctx.client
   
   // Build list of ALL var names for system prompt (AI can't read .env files)
   const availableVars = Array.from(allEnvVarNames).map(k => `$${k}`)
@@ -108,15 +115,38 @@ export const EnvProtectPlugin: Plugin = async (ctx) => {
     // ═══════════════════════════════════════════════════════════════
     "tool.execute.after": async (input, output) => {
       const originalOutput = output.output
+      let allRedactedVars: string[] = []
       
       // Redact sensitive values from tool output
       if (output.output && typeof output.output === "string") {
-        output.output = redact(output.output)
+        const { result, redactedVars } = redactWithTracking(output.output)
+        output.output = result
+        allRedactedVars.push(...redactedVars)
       }
       
       // Also redact from title if present
       if (output.title && typeof output.title === "string") {
-        output.title = redact(output.title)
+        const { result, redactedVars } = redactWithTracking(output.title)
+        output.title = result
+        allRedactedVars.push(...redactedVars)
+      }
+      
+      // Remove duplicates
+      allRedactedVars = [...new Set(allRedactedVars)]
+      
+      // Send TUI message if something was redacted
+      if (allRedactedVars.length > 0 && _client) {
+        try {
+          await _client.session.promptAsync({
+            path: { id: input.sessionID },
+            body: {
+              parts: [{
+                type: "text",
+                text: `[ENV PROTECTED] Redacted values: ${allRedactedVars.map(v => `$${v}`).join(", ")}`,
+              }],
+            },
+          })
+        } catch {}
       }
       
       // DEBUG: Log what was redacted (so you can PROVE it works)
@@ -127,7 +157,7 @@ export const EnvProtectPlugin: Plugin = async (ctx) => {
           before_length: originalOutput?.length,
           after_length: output.output?.length,
           redacted: true,
-          // Show first 200 chars of AFTER (safe - already redacted)
+          redactedVars: allRedactedVars,
           preview: output.output?.slice(0, 200),
         })
       }
@@ -154,7 +184,7 @@ IMPORTANT RULES:
 3. You CAN read .env.example files - those are safe templates
 4. NEVER use cat, less, head, tail, or any tool to view actual env/secret files
 4. NEVER hardcode sensitive values - always use the variable names
-5. If you see [ENV:VAR_NAME] in outputs, that means the actual value was redacted for security
+5. If you see [ENV:VAR_NAME was redacted] in outputs, that means the actual value was redacted for security
 6. To use a redacted value, reference the original variable: $VAR_NAME
 
 The variables are already exported - no need to run \`export\` or \`source .env\`.

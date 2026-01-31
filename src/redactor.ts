@@ -43,10 +43,45 @@ export function createRedactor(sensitiveVars: Map<string, string>): (text: strin
     for (const { key, regex } of patterns) {
       // Reset regex lastIndex for global flag
       regex.lastIndex = 0
-      result = result.replace(regex, `[ENV:${key}]`)
+      result = result.replace(regex, `[ENV:${key} was redacted]`)
     }
     
     return result
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Creates a redactor that also tracks which vars were redacted
+// Returns: { result: string, redactedVars: string[] }
+// ═══════════════════════════════════════════════════════════════
+export function createRedactorWithTracking(sensitiveVars: Map<string, string>): (text: string) => { result: string, redactedVars: string[] } {
+  const sortedVars = Array.from(sensitiveVars.entries())
+    .map(([key, value]) => ({ key, value }))
+    .filter(({ value }) => value.length >= 3)
+    .sort((a, b) => b.value.length - a.value.length)
+  
+  const escapeRegex = (str: string) => 
+    str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  
+  const patterns = sortedVars.map(({ key, value }) => ({
+    key,
+    regex: new RegExp(escapeRegex(value), "g"),
+  }))
+  
+  return (text: string) => {
+    let result = text
+    const redactedVars: string[] = []
+    
+    for (const { key, regex } of patterns) {
+      regex.lastIndex = 0
+      if (regex.test(result)) {
+        redactedVars.push(key)
+        regex.lastIndex = 0
+        result = result.replace(regex, `[ENV:${key} was redacted]`)
+      }
+    }
+    
+    return { result, redactedVars }
   }
 }
 
