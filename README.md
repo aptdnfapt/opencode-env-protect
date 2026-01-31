@@ -11,39 +11,15 @@ An OpenCode plugin that prevents environment variables from being leaked to AI m
 
 ## Installation
 
-### Step 1: Build the plugin
+Add to your OpenCode config (`~/.config/opencode/opencode.json`):
 
-```bash
-git clone https://github.com/user/opencode-env-protect
-cd opencode-env-protect
-bun install
-bun build src/index.ts --outfile dist/opencode-env-protect.js --target bun
-```
-
-### Step 2: Copy to plugins directory
-
-**Project level** (only for this project):
-```bash
-mkdir -p .opencode/plugins
-cp dist/opencode-env-protect.js .opencode/plugins/
-```
-
-**System level** (all projects):
-```bash
-mkdir -p ~/.config/opencode/plugins
-cp dist/opencode-env-protect.js ~/.config/opencode/plugins/
-```
-
-OpenCode automatically loads all `.js` files from these plugin directories - no config needed.
-
-### Alternative: npm (when published)
-
-Add to `~/.config/opencode/opencode.json`:
 ```json
 {
   "plugin": ["opencode-env-protect"]
 }
 ```
+
+That's it! OpenCode will auto-install from npm on next launch.
 
 ## How It Works
 
@@ -99,8 +75,18 @@ Connected with key sk-abc123secret
 
 **After redaction:**
 ```
-Connected with key [ENV:API_KEY]
+Connected with key [ENV:API_KEY was redacted]
 ```
+
+### 4. Chat Notification
+
+When redaction happens, a message appears in the chat letting you know what was caught:
+
+```
+[ENV PROTECTED] Redacted values: $API_KEY, $SECRET_TOKEN
+```
+
+This helps you verify the plugin is working and see exactly which variables were protected.
 
 Only variables with sensitive-looking names are redacted:
 - `KEY`, `SECRET`, `TOKEN`, `PASSWORD`, `PASSWD`
