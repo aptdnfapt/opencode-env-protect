@@ -36,6 +36,15 @@ cp dist/opencode-env-protect.js ~/.config/opencode/plugins/
 
 OpenCode automatically loads all `.js` files from these plugin directories - no config needed.
 
+### Alternative: npm (when published)
+
+Add to `~/.config/opencode/opencode.json`:
+```json
+{
+  "plugin": ["opencode-env-protect"]
+}
+```
+
 ## How It Works
 
 ### 1. Environment Scanning
