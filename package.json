@@ -1,6 +1,6 @@
 {
   "name": "opencode-env-protect",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Protects environment variables from being leaked to AI models",
   "type": "module",
   "main": "dist/opencode-env-protect.js",
