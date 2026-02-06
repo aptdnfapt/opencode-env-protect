@@ -39,7 +39,11 @@ export async function scanEnvFiles(dir: string, maxDepth: number): Promise<strin
 // Matches: .env, .env.local, .env.development, .env.production, etc.
 // ═══════════════════════════════════════════════════════════════
 function isEnvFile(filename: string): boolean {
-  return filename === ".env" || filename.startsWith(".env.")
+  // Match .env, .env.local, .env.production, etc.
+  // Exclude .env.example - those are templates with placeholder values
+  if (filename === ".env") return true
+  if (filename.startsWith(".env.") && !filename.endsWith(".example")) return true
+  return false
 }
 
 // ═══════════════════════════════════════════════════════════════
