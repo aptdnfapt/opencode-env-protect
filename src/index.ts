@@ -1,7 +1,7 @@
 import type { Plugin, Hooks, PluginInput } from "@opencode-ai/plugin"
 import { scanEnvFiles, parseEnvFile } from "./scanner"
-import { isSensitiveKey, createRedactor, createRedactorWithTracking } from "./redactor"
-import { appendFileSync } from "fs"
+import { isSensitiveKey, createRedactorWithTracking, shouldRedactValue, extractDbPassword } from "./redactor"
+import { appendFileSync, existsSync } from "fs"
 import { join } from "path"
 
 // Store sensitive vars: { varName: actualValue } - these get REDACTED
@@ -64,6 +64,16 @@ export const EnvProtectPlugin: Plugin = async (ctx) => {
   const { directory } = ctx
   
   // ═══════════════════════════════════════════════════════════════
+  // GATE: Only activate if this is a git repository
+  // Prevents plugin from breaking stuff in random directories
+  // ═══════════════════════════════════════════════════════════════
+  const gitDir = join(directory, ".git")
+  if (!existsSync(gitDir)) {
+    log("SKIPPED: No .git directory found", { directory })
+    return {} // Return empty hooks - plugin does nothing
+  }
+  
+  // ═══════════════════════════════════════════════════════════════
   // STEP 1: Scan .env files and collect sensitive vars
   // ═══════════════════════════════════════════════════════════════
   
@@ -79,6 +89,13 @@ export const EnvProtectPlugin: Plugin = async (ctx) => {
       // Only REDACT vars with sensitive-looking names (and not excluded)
       if (isSensitiveKey(key, SENSITIVE_PATTERNS) && value.length > 0 && !EXCLUDED_VARS.has(key)) {
         sensitiveVars.set(key, value)
+      }
+      
+      // Extract and redact passwords from database connection strings
+      // e.g., DATABASE_URL=postgres://user:PASSWORD@host:port/db
+      const dbPassword = extractDbPassword(value)
+      if (dbPassword) {
+        sensitiveVars.set(`${key}_PASSWORD`, dbPassword)
       }
       
       // ═══════════════════════════════════════════════════════════
@@ -142,7 +159,7 @@ export const EnvProtectPlugin: Plugin = async (ctx) => {
             body: {
               parts: [{
                 type: "text",
-                text: `[ENV PROTECTED] Redacted values: ${allRedactedVars.map(v => `$${v}`).join(", ")}`,
+                text: `[ENV PROTECTED] Environment variables ${allRedactedVars.map(v => `$${v}`).join(", ")} were redacted for security. Make sure these values don't get hardcoded in logs or code. If you think this is a mistake, ask the user via the ask tool.`,
               }],
             },
           })

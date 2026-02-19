@@ -6,8 +6,9 @@ An OpenCode plugin that prevents environment variables from being leaked to AI m
 
 1. **Scans `.env` files** → Finds all environment variables in your project
 2. **Auto-exports variables** → Makes them available in bash commands without manual `export`
-3. **Redacts sensitive values** → Replaces actual values with `[ENV:VAR_NAME]` in tool outputs
-4. **Instructs the AI** → Tells AI which variables exist and to never read `.env` files
+3. **Redacts sensitive values** → Replaces actual values with `[ENV:VAR_NAME was redacted]` in tool outputs
+4. **Extracts DB passwords** → Detects and redacts passwords embedded in database connection strings
+5. **Instructs the AI** → Tells AI which variables exist and to never read `.env` files
 
 ## Installation
 
@@ -23,7 +24,11 @@ That's it! OpenCode will auto-install from npm on next launch.
 
 ## How It Works
 
-### 1. Environment Scanning
+### 1. Git Repository Check
+
+**Plugin only activates in git repositories.** If no `.git` directory exists, the plugin does nothing. This prevents accidental redaction in random directories.
+
+### 2. Environment Scanning
 
 On plugin load, scans for `.env*` files up to 2 directories deep:
 - `.env`
@@ -35,7 +40,7 @@ On plugin load, scans for `.env*` files up to 2 directories deep:
 
 **Ignored directories**: `node_modules`, `.git`, `dist`, `build`, etc.
 
-### 2. Variable Export (How it works)
+### 3. Variable Export (How it works)
 
 When the plugin loads, it does `process.env[key] = value` for every variable found in `.env` files.
 
@@ -64,7 +69,7 @@ curl -H "Authorization: Bearer $API_KEY" https://api.example.com
 
 **System prompt tells AI** which variables exist (since it can't read `.env` files anymore).
 
-### 3. Value Redaction
+### 4. Smart Value Redaction
 
 When a tool (bash, read, etc.) returns output, the plugin scans for sensitive values and replaces them.
 
@@ -78,24 +83,85 @@ Connected with key sk-abc123secret
 Connected with key [ENV:API_KEY was redacted]
 ```
 
-### 4. Chat Notification
-
-When redaction happens, a message appears in the chat letting you know what was caught:
-
-```
-[ENV PROTECTED] Redacted values: $API_KEY, $SECRET_TOKEN
-```
-
-This helps you verify the plugin is working and see exactly which variables were protected.
+#### Sensitive Key Patterns
 
 Only variables with sensitive-looking names are redacted:
 - `KEY`, `SECRET`, `TOKEN`, `PASSWORD`, `PASSWD`
-- `API`, `PRIVATE`, `CREDENTIAL`, `AUTH`, `CERT`
+- `PRIVATE`, `CREDENTIAL`, `AUTH`, `CERT`
 
-**Excluded from redaction** (false positives):
-- `PWD`, `OLDPWD`, `PATH`, `HOME`, `USER`, `SHELL`, `TERM`, `LANG`, `EDITOR`, `PAGER`
+#### Smart Value Heuristics
 
-### 4. System Prompt Injection
+Not all values are redacted. The plugin uses heuristics to avoid false positives:
+
+**Values that are SKIPPED (never redacted):**
+- Booleans: `true`, `false`, `yes`, `no`, `on`, `off`
+- Common hosts: `localhost`, `127.0.0.1`, `0.0.0.0`
+- Null-ish: `null`, `undefined`, `none`
+- Common defaults: `development`, `production`, `staging`
+- Short pure numbers: `8080`, `3000`, `443` (ports, timeouts)
+- Paths: `/home/user`, `~/config`
+- URLs without auth: `https://api.example.com`
+- Common DB passwords: `postgres`, `mysql`, `password`, `changeme`, etc.
+
+**Values that ARE redacted:**
+- Known secret prefixes: `sk-`, `ghp_`, `xoxb-`, `AKIA`, `eyJ` (JWT), etc.
+- Long values (≥20 chars)
+- Medium values (≥12 chars) with mixed letters + digits
+- Values with special chars common in secrets
+
+#### Word Boundary Protection
+
+Short values (<10 chars) use word boundary matching to prevent partial replacements:
+```
+API_KEY=secret123
+Text: "my_secret123_var"  → NOT redacted (no word boundary)
+Text: "key is secret123"  → REDACTED (word boundary match)
+```
+
+Long values (≥10 chars) use substring matching since real secrets are usually long.
+
+### 5. Database Password Extraction
+
+Automatically extracts and redacts passwords from database connection strings:
+
+```
+DATABASE_URL=postgres://user:MySecretPass123@host:5432/db
+                            ^^^^^^^^^^^^^^
+                            This gets extracted and redacted
+```
+
+**Supported protocols:**
+- PostgreSQL: `postgres://`, `postgresql://`
+- MySQL: `mysql://`, `mariadb://`
+- MongoDB: `mongodb://`, `mongodb+srv://`
+- Redis: `redis://`, `rediss://`
+- RabbitMQ: `amqp://`, `amqps://`
+- MSSQL: `mssql://`
+- CockroachDB: `cockroachdb://`
+- JDBC: `jdbc:postgresql://`, etc.
+
+**Example:**
+```
+Original output:
+"Connected to postgres://admin:xK9mZ2pL5@db.example.com:5432/myapp"
+
+After redaction:
+"Connected to postgres://admin:[ENV:DATABASE_URL_PASSWORD was redacted]@db.example.com:5432/myapp"
+```
+
+**Note:** Common default passwords like `postgres`, `mysql`, `password` are NOT redacted to avoid false positives everywhere in your codebase.
+
+### 6. Chat Notification
+
+When redaction happens, a detailed message appears in the chat:
+
+```
+[ENV PROTECTED] Environment variables $API_KEY, $SECRET_TOKEN were redacted for security. 
+Make sure these values don't get hardcoded in logs or code. 
+If you think this is a mistake, ask the user via the ask tool.
+```
+
+### 7. System Prompt Injection
 
 Adds instructions to the AI's system prompt:
 
@@ -111,7 +177,7 @@ IMPORTANT RULES:
 3. You CAN read .env.example files - those are safe templates
 4. NEVER use cat, less, head, tail, or any tool to view actual env/secret files
 5. NEVER hardcode sensitive values - always use the variable names
-6. If you see [ENV:VAR_NAME] in outputs, that means the actual value was redacted
+6. If you see [ENV:VAR_NAME was redacted] in outputs, that means the actual value was redacted
 7. To use a redacted value, reference the original variable: $VAR_NAME
 
 The variables are already exported - no need to run `export` or `source .env`.
@@ -139,13 +205,10 @@ Example output:
   "before_length": 8,
   "after_length": 14,
   "redacted": true,
-  "preview": "KEY=[ENV:KEY]\n"
+  "redactedVars": ["API_KEY"],
+  "preview": "KEY=[ENV:API_KEY was redacted]\n"
 }
 ```
-
-This proves:
-- `before_length` vs `after_length` → something changed
-- `preview` → shows the redacted output (safe to log)
 
 ## Architecture
 
@@ -153,10 +216,12 @@ This proves:
 ┌─────────────────────────────────────────────────────────────┐
 │                     Plugin Load                              │
 ├─────────────────────────────────────────────────────────────┤
-│  1. Scan .env* files (2 levels deep)                        │
-│  2. Parse key=value pairs                                    │
-│  3. Export ALL vars to process.env                          │
-│  4. Build redactor for sensitive vars                        │
+│  1. Check for .git directory (skip if not a repo)           │
+│  2. Scan .env* files (2 levels deep)                        │
+│  3. Parse key=value pairs                                    │
+│  4. Extract DB passwords from connection strings             │
+│  5. Export ALL vars to process.env                          │
+│  6. Build smart redactor with heuristics                     │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -168,8 +233,10 @@ This proves:
 │           ▼                                                  │
 │  Output: "Error: invalid key sk-abc123"                     │
 │           │                                                  │
-│           ▼ (redactor)                                       │
-│  Output: "Error: invalid key [ENV:API_KEY]"                 │
+│           ▼ (smart redactor)                                 │
+│  - Check value heuristics (skip common values)              │
+│  - Use word boundary for short values                        │
+│  - Replace with [ENV:VAR_NAME was redacted]                 │
 │           │                                                  │
 │           ▼                                                  │
 │  AI receives redacted output                                 │
@@ -182,7 +249,7 @@ This proves:
 │  Appends to system prompt:                                   │
 │  - List of available $VAR_NAME variables                    │
 │  - Instructions to never read .env files                    │
-│  - How to interpret [ENV:X] tags                            │
+│  - How to interpret [ENV:X was redacted] tags               │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -197,17 +264,41 @@ This proves:
 
 ```
 src/
-├── index.ts      # Main plugin - hooks + auto-export logic
+├── index.ts      # Main plugin - hooks, git check, auto-export
 ├── scanner.ts    # .env file discovery and parsing
-├── redactor.ts   # Value replacement logic
+├── redactor.ts   # Smart value replacement with heuristics
 └── index.test.ts # Tests
 ```
 
+## What Gets Redacted vs Skipped
+
+### Redacted ✓
+| Example | Why |
+|---------|-----|
+| `sk-abc123xyz` | Known secret prefix (`sk-`) |
+| `ghp_xxxxxxxxxxxx` | GitHub token prefix |
+| `eyJhbGciOiJIUzI1...` | JWT token prefix |
+| `AKIAIOSFODNN7EXAMPLE` | AWS key prefix |
+| `xK9mZ2pL5qR8nT3` | Long mixed alphanumeric |
+| `secret123abc456` | Medium length + mixed chars |
+
+### Skipped ✗
+| Example | Why |
+|---------|-----|
+| `true`, `false` | Blocklisted boolean |
+| `localhost` | Blocklisted common host |
+| `8080`, `3000` | Short pure number (port) |
+| `/home/user/app` | Path (starts with `/`) |
+| `https://api.com` | URL without auth |
+| `postgres`, `password` | Common default password |
+| `development` | Blocklisted environment name |
+
 ## Limitations
 
-1. **Minimum value length**: Values shorter than 3 characters are not redacted (to avoid false positives)
-2. **Pattern-based detection**: Only vars matching sensitive patterns are redacted - a var named `MY_DATA` won't be redacted even if it contains secrets
+1. **Git required**: Plugin only works in git repositories
+2. **Pattern-based detection**: Only vars matching sensitive patterns (`KEY`, `SECRET`, etc.) are considered
 3. **Scan depth**: Only scans 2 levels deep by default
+4. **Heuristics not perfect**: Some edge cases may slip through or cause false positives
 
 ## License
 
