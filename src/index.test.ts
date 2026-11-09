@@ -155,6 +155,11 @@ describe("shouldRedactValue", () => {
     expect(shouldRedactValue("https://api.example.com")).toBe(false)
     expect(shouldRedactValue("http://localhost:3000")).toBe(false)
   })
+
+  test("skips bare hostnames", () => {
+    expect(shouldRedactValue("auth.example.com")).toBe(false)
+    expect(shouldRedactValue("d2lpkm1h3gh3rw.cloudfront.net")).toBe(false)
+  })
   
   test("skips short pure numbers (ports, etc)", () => {
     expect(shouldRedactValue("8080")).toBe(false)
