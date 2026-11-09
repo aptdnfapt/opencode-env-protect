@@ -1,18 +1,28 @@
 # opencode-env-protect
 
 An OpenCode plugin that prevents environment variables from being leaked to AI models.
+Works with **OpenCode 1** and **OpenCode 2**.
 
 ## What It Does
 
 1. **Scans `.env` files** → Finds all environment variables in your project
-2. **Auto-exports variables** → Makes them available in bash commands without manual `export`
-3. **Redacts sensitive values** → Replaces actual values with `[ENV:VAR_NAME was redacted]` in tool outputs
-4. **Extracts DB passwords** → Detects and redacts passwords embedded in database connection strings
-5. **Instructs the AI** → Tells AI which variables exist and to never read `.env` files
+2. **Auto-exports variables** → Makes them available in shell commands without manual `export`
+3. **Blocks env file access** → Read/edit/write/grep/patch tools cannot touch real `.env` files (OpenCode 2)
+4. **Redacts sensitive values** → Replaces actual values with `[ENV:VAR_NAME was redacted]` in tool outputs
+5. **Extracts DB passwords** → Detects and redacts passwords embedded in database connection strings
+6. **Instructs the AI** → Tells AI which variables exist and to never read `.env` files
 
 ## Installation
 
-Add to your OpenCode config (`~/.config/opencode/opencode.json`):
+**OpenCode 2** (uses `plugins`, plural):
+
+```json
+{
+  "plugins": ["opencode-env-protect"]
+}
+```
+
+**OpenCode 1** (uses `plugin`, singular; OpenCode 2 still accepts this legacy key):
 
 ```json
 {
@@ -21,6 +31,9 @@ Add to your OpenCode config (`~/.config/opencode/opencode.json`):
 ```
 
 That's it! OpenCode will auto-install from npm on next launch.
+
+Requires OpenCode `1.18.29+` (V1 object entrypoint) or any `2.x` release.
+The package depends on `@opencode/plugin` and is bundled with `bun build`.
 
 ## How It Works
 
@@ -42,21 +55,15 @@ On plugin load, scans for `.env*` files up to 2 directories deep:
 
 ### 3. Variable Export (How it works)
 
-When the plugin loads, it does `process.env[key] = value` for every variable found in `.env` files.
+Every variable found in `.env` files is made available to shell commands.
 
-**Why this works:**
-```
-Your shell
-    ↓ spawns
-OpenCode process (plugin sets process.env.API_KEY = "secret")
-    ↓ spawns
-Bash PTY (inherits process.env → $API_KEY is available)
-```
+- **OpenCode 2**: the plugin registers a `shell.create.before` hook and adds the variables to each command's `env`. Nothing is written to the server's global `process.env`.
+- **OpenCode 1**: the plugin sets `process.env[key] = value`; bash PTYs inherit it from the OpenCode process.
 
-Child processes inherit environment variables from their parent. So:
-- Plugin adds vars to OpenCode's `process.env`
-- When AI runs bash commands, those bash PTYs inherit the vars
+Either way:
+- When AI runs shell commands, `$VAR_NAME` is already set
 - AI can use `$VAR_NAME` directly - no `export` or `source .env` needed
+- Existing values in your environment are never overwritten
 
 ```bash
 # AI can just run this - vars already available
@@ -183,6 +190,23 @@ IMPORTANT RULES:
 The variables are already exported - no need to run `export` or `source .env`.
 ```
 
+### 8. Env File Access Blocking (OpenCode 2)
+
+Real env files cannot be read or edited through the file-oriented tools:
+
+- `read`, `edit`, `write`, `grep` when the path points at `.env`, `.env.*`, `*.env`, or `*.env.*`
+- `patch` / `apply_patch` when a patch header names a protected file
+
+Protected:
+- `.env`, `.env.local`, `.env.production`, `api.env`, `config.env.local`
+
+Allowed:
+- `.env.example`, `.env.sample`, `.env.template`, `.env.dist`, `.env.defaults`
+- Source files such as `app.env.ts`
+
+Blocked calls throw an error that tells the model to use `$VAR_NAME` instead.
+OpenCode 1 gets the equivalent `tool.execute.before` hook.
+
 ## Debug Mode
 
 To verify redaction is working, enable debug logging:
@@ -220,13 +244,20 @@ Example output:
 │  2. Scan .env* files (2 levels deep)                        │
 │  3. Parse key=value pairs                                    │
 │  4. Extract DB passwords from connection strings             │
-│  5. Export ALL vars to process.env                          │
+│  5. Export vars (shell hook in V2, process.env in V1)        │
 │  6. Build smart redactor with heuristics                     │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│              Hook: tool.execute.after                        │
+│         Hook: tool.execute.before / execute.before           │
+├─────────────────────────────────────────────────────────────┤
+│  Blocks read/edit/write/grep/patch on real .env files        │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│         Hook: tool.execute.after / execute.after             │
 ├─────────────────────────────────────────────────────────────┤
 │  Tool runs (bash, read, etc.)                               │
 │           │                                                  │
@@ -244,7 +275,7 @@ Example output:
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│         Hook: experimental.chat.system.transform             │
+│     Hook: experimental.chat.system.transform / context       │
 ├─────────────────────────────────────────────────────────────┤
 │  Appends to system prompt:                                   │
 │  - List of available $VAR_NAME variables                    │
@@ -255,19 +286,32 @@ Example output:
 
 ## Hooks Used
 
-| Hook | Purpose |
-|------|---------|
-| `tool.execute.after` | Redacts sensitive values from tool outputs before AI sees them |
-| `experimental.chat.system.transform` | Adds env var list and safety instructions to system prompt |
+| OpenCode 1 | OpenCode 2 | Purpose |
+|---|---|---|
+| `tool.execute.before` | `ctx.tool.hook("execute.before")` | Blocks read/edit/write/grep/patch on env files |
+| `tool.execute.after` | `ctx.tool.hook("execute.after")` | Redacts sensitive values before AI sees them |
+| `shell.env` | `ctx.shell.hook("create.before")` | Injects variables into shell commands |
+| `experimental.chat.system.transform` | `ctx.session.hook("context")` | Adds env var list and safety instructions |
+
+V2 chat notifications use `ctx.session.synthetic` and are opt-in:
+
+```jsonc
+{
+  "plugins": [
+    { "package": "opencode-env-protect", "options": { "notify": true } }
+  ]
+}
+```
 
 ## File Structure
 
 ```
 src/
-├── index.ts      # Main plugin - hooks, git check, auto-export
-├── scanner.ts    # .env file discovery and parsing
-├── redactor.ts   # Smart value replacement with heuristics
-└── index.test.ts # Tests
+├── index.ts        # Dual V1 + V2 entrypoint, hooks, git check, auto-export
+├── scanner.ts      # .env file discovery and parsing
+├── redactor.ts     # Smart value replacement with heuristics
+├── index.test.ts   # Scanner + redactor tests
+└── plugin.test.ts  # V2 entrypoint/hook tests
 ```
 
 ## What Gets Redacted vs Skipped
@@ -299,6 +343,9 @@ src/
 2. **Pattern-based detection**: Only vars matching sensitive patterns (`KEY`, `SECRET`, etc.) are considered
 3. **Scan depth**: Only scans 2 levels deep by default
 4. **Heuristics not perfect**: Some edge cases may slip through or cause false positives
+5. **Load-time snapshot**: Env files are read when the plugin loads. Reload OpenCode after editing them.
+6. **Not a sandbox**: Shell commands that transform values (base64, split strings) can still evade redaction.
+   The V2 file-tool block is a guardrail, not an OS-level restriction.
 
 ## License
 

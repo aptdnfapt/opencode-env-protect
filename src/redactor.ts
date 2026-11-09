@@ -98,6 +98,9 @@ export function shouldRedactValue(value: string): boolean {
   // Known secret prefix - ALWAYS redact
   if (SECRET_PREFIXES.some(prefix => trimmed.startsWith(prefix))) return true
   
+  // Bare hostnames/domains - not secrets (e.g. auth.example.com)
+  if (/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i.test(trimmed)) return false
+  
   // Long value (>=20 chars) - likely a secret
   if (trimmed.length >= 20) return true
   
