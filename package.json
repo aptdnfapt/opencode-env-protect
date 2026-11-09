@@ -1,7 +1,7 @@
 {
   "name": "opencode-env-protect",
-  "version": "0.3.0",
-  "description": "Protects environment variables from being leaked to AI models",
+  "version": "0.4.0",
+  "description": "Protects environment variables from being leaked to AI models (OpenCode 1 and 2)",
   "type": "module",
   "main": "dist/opencode-env-protect.js",
   "files": [
@@ -9,17 +9,16 @@
     "README.md"
   ],
   "scripts": {
-    "build": "bun build src/index.ts --outfile dist/opencode-env-protect.js --target bun",
+    "build": "bun build src/index.ts --outfile dist/opencode-env-protect.js --target bun --external @opencode/plugin",
     "test": "bun test",
-    "prepublishOnly": "bun run build"
+    "prepublishOnly": "npm run build"
   },
-  "peerDependencies": {
-    "@opencode-ai/plugin": "*"
+  "dependencies": {
+    "@opencode/plugin": "^2.0.26"
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "latest",
     "bun-types": "latest",
-    "typescript": "^5.0.0"
+    "typescript": "^5.6.0"
   },
   "keywords": [
     "opencode",
