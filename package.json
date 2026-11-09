@@ -9,9 +9,9 @@
     "README.md"
   ],
   "scripts": {
-    "build": "bun build src/index.ts --outfile dist/opencode-env-protect.js --target bun --external @opencode/plugin",
+    "bundle": "bun build src/index.ts --outfile dist/opencode-env-protect.js --target bun --external @opencode/plugin",
     "test": "bun test",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "bun run bundle"
   },
   "dependencies": {
     "@opencode/plugin": "^2.0.26"
